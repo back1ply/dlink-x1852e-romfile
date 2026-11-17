@@ -118,6 +118,56 @@ def aes_cbc_decrypt(body: bytes, key: bytes, iv: bytes) -> bytes:
         return outp.read_bytes()
 
 
+def aes_cbc_encrypt(body: bytes, key: bytes, iv: bytes) -> bytes:
+    bits = len(key) * 8
+    with tempfile.TemporaryDirectory() as td:
+        inp, outp = Path(td) / "in.bin", Path(td) / "out.bin"
+        inp.write_bytes(body)
+        cmd = ["openssl", "enc", f"-aes-{bits}-cbc", "-nopad",
+               "-K", key.hex(), "-iv", iv.hex(), "-in", str(inp), "-out", str(outp)]
+        r = subprocess.run(cmd, capture_output=True)
+        if r.returncode != 0:
+            raise RuntimeError("openssl: " + r.stderr.decode(errors="ignore").strip())
+        return outp.read_bytes()
+
+
+def pack_romfile(plaintext: bytes, logical_len: int, pad: bytes = b"\x00") -> bytes:
+    """Build an EG romfile.cfg: crc32(ct)[4 BE] + logical_len[4 BE] + AES-128-CBC ct.
+
+    `plaintext` is the exact buffer to encrypt. If it is not a multiple of 16 it is
+    padded with `pad`. `logical_len` is the value written to the length field (the
+    device reads only that many bytes back); default caller passes len(config_text).
+    """
+    import binascii
+    buf = plaintext
+    if len(buf) % 16:
+        buf += pad * (16 - len(buf) % 16)
+    ct = aes_cbc_encrypt(buf, EG_KEY, EG_IV)
+    crc = (binascii.crc32(ct) & 0xFFFFFFFF).to_bytes(4, "big")
+    return crc + int(logical_len).to_bytes(4, "big") + ct
+
+
+def cmd_encrypt(a) -> int:
+    """Re-encrypt plaintext config into a restorable romfile.cfg.
+
+    Byte-exact round-trip (proof): feed the full block-aligned plaintext and pass
+    --length with the original config length. Practical edit: feed your edited XML
+    and omit --length (it defaults to the file size; the tail is zero-padded).
+    """
+    pt = Path(a.file).read_bytes()
+    logical = a.length if a.length is not None else len(pt)
+    out = a.output or (a.file + ".romfile.cfg")
+    packed = pack_romfile(pt, logical)
+    Path(out).write_bytes(packed)
+    print(f"[encrypt] plaintext={len(pt)}B logical_len={logical} -> {out} ({len(packed)}B)")
+    if a.verify_against:
+        orig = Path(a.verify_against).read_bytes()
+        identical = orig == packed
+        print(f"[verify] byte-identical to {a.verify_against}: {identical}")
+        return 0 if identical else 2
+    return 0
+
+
 def cmd_solve(a) -> int:
     """Decrypt a DSL-X1852E EG romfile.cfg with the recovered AES-128-CBC key/IV."""
     import binascii
@@ -279,6 +329,12 @@ def main(argv=None) -> int:
 
     p = sub.add_parser("solve", help="decrypt an EG romfile.cfg with the recovered AES-128-CBC key/IV")
     p.add_argument("file"); p.add_argument("-o", "--output"); p.set_defaults(fn=cmd_solve)
+
+    p = sub.add_parser("encrypt", help="re-pack plaintext config into a restorable romfile.cfg")
+    p.add_argument("file"); p.add_argument("-o", "--output")
+    p.add_argument("--length", type=int, help="logical config length for the header (default: file size)")
+    p.add_argument("--verify-against", help="assert the output is byte-identical to this file")
+    p.set_defaults(fn=cmd_encrypt)
 
     a = ap.parse_args(argv)
     try:
