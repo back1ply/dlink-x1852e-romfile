@@ -1,0 +1,21 @@
+# Never commit real device data or secrets
+*.cfg
+*.bin
+romfile*.xml
+*_decrypted.xml
+*_live.cfg
+incoming/
+input/
+work/
+secrets/
+
+# Vendor firmware binaries (copyright; reference by hash only)
+azencrypt
+*libcfg_clisvc*
+*.so
+*.out
+
+# Python
+__pycache__/
+*.pyc
+.venv/
