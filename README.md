@@ -84,14 +84,25 @@ ASCII key passed to `aes_expand_key` and the static `.data` IV passed to
 `romfile_tool.py` also has a `findkey` mode that harvests candidate keys from a
 firmware rootfs, for related models.
 
-### Scope (what's confirmed vs open)
+### Scope — the key is a vendor-wide constant (verified on a second model)
 
-Confirmed on `EG_1.00b15`. The AU-region firmware (`1.12`–`1.20`) does **not** encrypt
-`romfile.cfg` at all — `azencrypt` is absent and the config ships as plaintext — so this
-scheme is specific to the **EG (encrypted) firmware line**. Whether the same
-`0123456789abcdef` / `aa55…` key is reused across sibling Airoha/TrendChip models
-(DSL-X3052E, DSL-3782, ISP-branded units) is **open** — it needs one such device's
-`azencrypt`/`libtcapi` to check. PRs with other models' findings welcome.
+The same `0123456789abcdef` / `aa55…` key+IV is **reused across the DSL-X Airoha family**,
+not per-model. Confirmed by unpacking a second model's firmware:
+
+| model | firmware | `azencrypt` arch | key | IV |
+|-------|----------|------------------|-----|----|
+| DSL-X1852E | EG_1.00b15 | MIPS (32-bit BE) | `0123456789abcdef` | `aa55…` |
+| DSL-X3052E | AU_1.05b01 | ARM (32-bit LE) | `0123456789abcdef` | `aa55…` |
+
+These are **independently compiled binaries for different CPUs**, yet both load the same
+ASCII string as the first argument to `aes_expand_key` (MIPS `a0` / ARM `r0`) and carry
+the identical 16-byte IV constant — so the key is baked vendor-wide, not generated per
+device or per build. (Note: the DSL-X1852E *AU* firmware ships no `azencrypt` and stores
+the config in plaintext; encryption appears on the X-series EG builds and on the X3052E.)
+
+The firmware image itself is AES-128-CBC with key `11223344556677889900aabbccddeeff`,
+IV `a5…` (from the GPL `buildImage.sh`), inside a 256-byte `HDR4`/trx header — also shared
+across these models.
 
 ## Commands & tools
 
