@@ -19,3 +19,7 @@ azencrypt
 __pycache__/
 *.pyc
 .venv/
+
+# build output / scratch
+dist/
+work_fixture*

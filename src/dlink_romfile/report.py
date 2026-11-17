@@ -1,22 +1,16 @@
-#!/usr/bin/env python3
-"""Summarise a D-Link / TrendChip `romfile.cfg` (plaintext XML) as a readable report.
+"""Render a plaintext TrendChip/D-Link ``romfile.cfg`` as a readable report.
 
-    python romfile_report.py input/romfile_live.cfg
-    python romfile_report.py input/romfile_live.cfg --show-secrets
-    python romfile_report.py input/romfile_live.cfg --section Wan --section WLan
-
-Secrets (passwords, PSKs, SNMP community, SIP auth) are masked unless
---show-secrets is given. Use `tools/fetch_live_config.py` to download the file itself.
+The config is near-XML (illegal entity refs and attribute names like ``11nMode``),
+so parsing repairs it, with a regex fallback. Secrets are masked unless asked for.
+Returns strings; the CLI prints them.
 """
+from __future__ import annotations
 
-import argparse
 import re
-import sys
 import xml.etree.ElementTree as ET
 
 SECRET_HINT = re.compile(r"(pass|passwd|pwd|psk|key|secret|community|auth|token|pin)", re.I)
 
-# Sections worth showing first, in a sensible reading order.
 PRIORITY = [
     "SysInfo", "Sys", "Lan", "LanAlias", "Dhcp6s", "Wan", "Adsl", "WLan", "WLan11ac",
     "Firewall", "Nat", "VirServer", "portTriggering", "Accesslimit", "Account", "System",
@@ -25,36 +19,29 @@ PRIORITY = [
 ]
 
 ENTITY = re.compile(r"&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)")
-# The vendor's own parser accepts attribute names that XML forbids, e.g. 11nMode="1"
 DIGIT_NAME = re.compile(r'(\s)(\d[\w.\-]*)="')
 
 
-def repair(raw):
+def repair(raw: str) -> str:
     return DIGIT_NAME.sub(r'\1_\2="', ENTITY.sub("&amp;", raw))
 
 
-def load(path):
-    """Parse the romfile; it is near-XML, so repair entities and illegal attribute names."""
-    raw = open(path, "rb").read().decode("utf-8", "replace")
+def parse(raw: str):
+    """Return (data, warning). data is {section: [(label, attrs), ...]}."""
+    root = None
     for candidate in (raw, repair(raw)):
         try:
-            return ET.fromstring(candidate), None
+            root = ET.fromstring(candidate)
+            break
         except ET.ParseError:
             continue
-    try:
-        ET.fromstring(repair(raw))
-    except ET.ParseError as exc:
-        return None, "XML parse failed (%s) - falling back to regex" % exc
-    return None, None
+    if root is not None:
+        return _collect(root), None
+    return _collect_lenient(raw), "XML parse failed; used regex fallback"
 
 
-def collect(root):
-    """{section: [(label, attrs), ...]} walking descendants so nested blocks are kept.
-
-    WAN lives under <Wan><WanPTM><Common .../><Entry .../></WanPTM></Wan>, so a direct
-    child scan would silently drop it.
-    """
-    data = {}
+def _collect(root) -> dict:
+    data: dict = {}
     for section in root:
         items = []
         if section.attrib:
@@ -68,13 +55,12 @@ def collect(root):
     return data
 
 
-def collect_lenient(raw):
-    """Regex fallback with the same output shape; peels the outer <ROMFILE> wrapper."""
+def _collect_lenient(raw: str) -> dict:
     inner = raw
     m = re.match(r"\s*<ROMFILE>(.*)</ROMFILE>\s*$", raw, re.S)
     if m:
         inner = m.group(1)
-    data = {}
+    data: dict = {}
     for m in re.finditer(r"<([A-Za-z][\w.-]*)>(.*?)</\1>", inner, re.S):
         section, body = m.group(1), m.group(2)
         items = []
@@ -87,20 +73,20 @@ def collect_lenient(raw):
     return data
 
 
-def mask(value):
+def mask(value: str) -> str:
     if len(value) <= 4:
         return "*" * len(value)
     return value[:2] + "*" * (len(value) - 4) + value[-2:]
 
 
-def show(name, items, show_secrets):
-    print("\n== %s (%d) ==" % (name, len(items)))
+def _render_section(name: str, items, show_secrets: bool) -> list[str]:
+    lines = ["", "== %s (%d) ==" % (name, len(items))]
     for i, (label, attrs) in enumerate(items):
         parts = []
         for k, v in attrs.items():
             if v == "":
                 continue
-            if len(v) > 60:                      # TR-069 attribute blobs; not human-readable
+            if len(v) > 60:
                 v = "<%d chars>" % len(v)
             elif not show_secrets and SECRET_HINT.search(k) and v not in ("0", "No", "None"):
                 v = mask(v)
@@ -108,39 +94,24 @@ def show(name, items, show_secrets):
         if not parts:
             continue
         prefix = "[%d]" % i if label.lower().startswith("entry") else "%s:" % label
-        print("  %s %s" % (prefix, "  ".join(parts)))
+        lines.append("  %s %s" % (prefix, "  ".join(parts)))
+    return lines
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("romfile")
-    ap.add_argument("--show-secrets", action="store_true")
-    ap.add_argument("--section", action="append", default=None)
-    args = ap.parse_args()
-
-    raw = open(args.romfile, "rb").read().decode("utf-8", "replace")
-    root, warn = load(args.romfile)
-    if warn:
-        print("note: %s" % warn, file=sys.stderr)
-    data = collect(root) if root is not None else collect_lenient(raw)
-
-    if args.section:
-        wanted = args.section
+def render(raw: str, sections=None, show_secrets: bool = False) -> tuple[str, str]:
+    """Return (report_text, warning_text)."""
+    data, warn = parse(raw)
+    if sections:
+        wanted = list(sections)
     else:
         wanted = [s for s in PRIORITY if s in data]
         wanted += [s for s in data if s not in PRIORITY]
-
+    out: list[str] = []
     for name in wanted:
         if name in data:
-            show(name, data[name], args.show_secrets)
-        else:
-            print("\n== %s: not present ==" % name, file=sys.stderr)
-
-    if not args.section:
+            out += _render_section(name, data[name], show_secrets)
+    if not sections:
         hidden = sorted(set(data) - set(wanted))
         if hidden:
-            print("\n(%d further sections not shown: %s)" % (len(hidden), ", ".join(hidden)))
-
-
-if __name__ == "__main__":
-    main()
+            out += ["", "(%d further sections not shown: %s)" % (len(hidden), ", ".join(hidden))]
+    return "\n".join(out).lstrip("\n"), (warn or "")

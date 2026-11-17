@@ -8,17 +8,32 @@ This is defensive/educational reverse engineering of a device you own. It is not
 remote exploit — recovering the key requires either the firmware image or a shell on
 your own unit. Use it only on hardware you are authorized to work on.
 
+## Install
+
+```bash
+uv tool install dlink-x1852e-romfile    # or: pipx install dlink-x1852e-romfile
+# from a checkout:  uv tool install .    or    pip install .
+```
+
+Installs a `romfile` command. Requires **`openssl` on PATH** (used for the AES
+primitive). No Python dependencies.
+
 ## TL;DR
 
 ```bash
 # decrypt a backup you exported from your own router
-python romfile_tool.py solve romfile.cfg -o config.xml
+romfile solve romfile.cfg -o config.xml
 
 # edit config.xml, then re-pack it into a restorable backup
-python romfile_tool.py encrypt config.xml -o new_romfile.cfg
+romfile encrypt config.xml -o new_romfile.cfg
+
+# machine-readable header info
+romfile info romfile.cfg --json
 ```
 
 The config comes out as plain `<ROMFILE>…</ROMFILE>` XML/`name=value` text.
+Subcommands: `info solve encrypt decrypt try findkey report`. Data is written to
+stdout; notes/keys go to stderr. Exit codes: `0` ok, `1` failure, `2` usage.
 
 ### Verified correct (not just "looks like XML")
 
@@ -29,7 +44,7 @@ this is an exact oracle, not a heuristic.
 
 ```bash
 # reproduce the proof on your own file
-python romfile_tool.py encrypt full_plaintext.bin --length <cfg_len> \
+romfile encrypt full_plaintext.bin --length <cfg_len> \
     -o out.cfg --verify-against original_romfile.cfg   # -> byte-identical: True
 ```
 
@@ -78,17 +93,56 @@ scheme is specific to the **EG (encrypted) firmware line**. Whether the same
 (DSL-X3052E, DSL-3782, ISP-branded units) is **open** — it needs one such device's
 `azencrypt`/`libtcapi` to check. PRs with other models' findings welcome.
 
-## Tools
+## Commands & tools
+
+The installed `romfile` command (package `dlink_romfile`, source in `src/`):
+
+| command | purpose |
+|---------|---------|
+| `romfile info` | parse the container header (`--json`) |
+| `romfile solve` | decrypt with the recovered AES-128-CBC key/IV |
+| `romfile encrypt` | re-pack plaintext into a restorable `romfile.cfg` (`--verify-against`) |
+| `romfile decrypt` | decrypt with an explicit `--key`/`--iv`/`--mode` |
+| `romfile try` | brute a candidate key list |
+| `romfile findkey` | harvest keys from a firmware rootfs/binary and try each |
+| `romfile report` | readable summary of a plaintext config (masks secrets unless `--show-secrets`; `--json`) |
+
+Standalone device helpers in `tools/` (need a live device, not part of the package):
 
 | file | purpose |
 |------|---------|
-| `romfile_tool.py` | `info` / `solve` / `encrypt` / `decrypt` / `try` / `findkey` for `romfile.cfg` |
 | `tools/fetch_live_config.py` | pull the plaintext running config the EG web server serves |
-| `tools/romfile_report.py` | pretty-print a decrypted/plaintext config (redacts secrets by default) |
 | `tools/telnet_exec.py` | run one command over telnet (raw-socket; Py3.13+ has no telnetlib) |
 | `tools/tftp_recv.py` | one-shot TFTP receiver, to pull a file off the device |
 
-Requires `openssl` on PATH. No third-party Python packages.
+Requires `openssl` on PATH. No third-party Python runtime dependencies.
+
+### Migrating from the old script
+
+The former `romfile_tool.py` and `tools/romfile_report.py` are now the `romfile`
+command — same subcommands and flags:
+
+| old | new |
+|-----|-----|
+| `python romfile_tool.py solve x.cfg -o y.xml` | `romfile solve x.cfg -o y.xml` |
+| `python romfile_tool.py encrypt y.xml -o x.cfg` | `romfile encrypt y.xml -o x.cfg` |
+| `python tools/romfile_report.py cfg.xml` | `romfile report cfg.xml` |
+
+### For agents / CI
+
+Non-interactive by design: no prompts, nothing read from stdin, deterministic exit
+codes, and `--json` on `info`/`report` emits exactly one JSON document on stdout. Run
+`romfile <sub> --help` for the full flag list.
+
+## Development
+
+```bash
+uv sync          # install with the dev group (pytest)
+uv run pytest -q # 11 behavioural tests (one per subcommand)
+uv build         # wheel + sdist in dist/
+```
+
+A `justfile` wraps these as `just setup|test|lint|check`.
 
 ## Related work / prior art
 
