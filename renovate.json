@@ -4,12 +4,24 @@
     "config:recommended",
     "helpers:pinGitHubActionDigests"
   ],
+  "platformAutomerge": false,
   "packageRules": [
     {
       "matchManagers": [
         "github-actions"
       ],
       "groupName": "GitHub Actions"
+    },
+    {
+      "description": "Merge non-major updates once CI passes; majors still need a human.",
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "pin",
+        "pinDigest",
+        "digest"
+      ],
+      "automerge": true
     }
   ]
 }
