@@ -189,6 +189,26 @@ b28 backup. The regression that matters is the ACL default — after a factory r
 b28 upgrade, telnet answers on the LAN with the shipped `admin` / `1234` account until
 someone changes it or sets `Activate=No` again.
 
+## Scope of the evidence
+
+What the claims above rest on, so they are not read wider than they go:
+
+- **One DSL-X1852E unit**, EG region, running `EG_1.00b15`: its live config, the first
+  512 KB of its firmware partition, and the `azencrypt` / `libcfg_clisvc.so` binaries
+  from its rootfs.
+- **`EG_1.00b28` as a download only.** The image was unpacked and compared statically.
+  It was never flashed, so the telnet-ACL and backup-CGI changes are read from the
+  factory config, web tree and CGI binaries inside the image — not observed on running
+  hardware.
+- **`DSL-X3052E` AU_1.05b01** firmware, for the key-reuse comparison: a second model on
+  a different CPU architecture, with the same constants.
+
+That supports a vendor-wide key and container for the DSL-X Airoha family; it does not
+make either universal to every D-Link DSL device, and other regions, hardware revisions
+and firmware branches were not examined. If yours differs, `romfile info` and `romfile
+unpack` will show it quickly. Likewise the telnet default is what one b28 image ships,
+not a survey of deployed units.
+
 ## Commands & tools
 
 The installed `romfile` command (package `dlink_romfile`, source in `src/`):
