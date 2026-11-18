@@ -1,15 +1,16 @@
 """Render a plaintext TrendChip/D-Link ``romfile.cfg`` as a readable report.
 
 The config is near-XML (illegal entity refs and attribute names like ``11nMode``),
-so parsing repairs it, with a regex fallback. Secrets are masked unless asked for.
-Returns strings; the CLI prints them.
+so parsing repairs it, with a regex fallback. Sensitivity rules come from
+:mod:`dlink_romfile.redact`, the same ones file redaction uses, so the two views
+cannot disagree. Returns strings; the CLI prints them.
 """
 from __future__ import annotations
 
 import re
 import xml.etree.ElementTree as ET
 
-SECRET_HINT = re.compile(r"(pass|passwd|pwd|psk|key|secret|community|auth|token|pin)", re.I)
+from . import redact
 
 PRIORITY = [
     "SysInfo", "Sys", "Lan", "LanAlias", "Dhcp6s", "Wan", "Adsl", "WLan", "WLan11ac",
@@ -73,12 +74,6 @@ def _collect_lenient(raw: str) -> dict:
     return data
 
 
-def mask(value: str) -> str:
-    if len(value) <= 4:
-        return "*" * len(value)
-    return value[:2] + "*" * (len(value) - 4) + value[-2:]
-
-
 def _render_section(name: str, items, show_secrets: bool) -> list[str]:
     lines = ["", "== %s (%d) ==" % (name, len(items))]
     for i, (label, attrs) in enumerate(items):
@@ -88,8 +83,8 @@ def _render_section(name: str, items, show_secrets: bool) -> list[str]:
                 continue
             if len(v) > 60:
                 v = "<%d chars>" % len(v)
-            elif not show_secrets and SECRET_HINT.search(k) and v not in ("0", "No", "None"):
-                v = mask(v)
+            elif not show_secrets and redact.classify(k.lstrip("_"), v):
+                v = redact.mask(v)
             parts.append("%s=%s" % (k.lstrip("_"), v))
         if not parts:
             continue

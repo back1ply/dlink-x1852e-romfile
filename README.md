@@ -15,12 +15,13 @@ your own unit. Use it only on hardware you are authorized to work on.
 ## Install
 
 ```bash
-uv tool install dlink-x1852e-romfile    # or: pipx install dlink-x1852e-romfile
+# not on PyPI yet - install from the repo
+uv tool install "git+https://github.com/back1ply/dlink-x1852e-romfile"
 # from a checkout:  uv tool install .    or    pip install .
 ```
 
 Installs a `romfile` command. Requires **`openssl` on PATH** (used for the AES
-primitive). No Python dependencies.
+primitive). No Python dependencies; 7z is optional, for extracting a firmware rootfs.
 
 ## TL;DR
 
@@ -31,13 +32,16 @@ romfile solve romfile.cfg -o config.xml
 # edit config.xml, then re-pack it into a restorable backup
 romfile encrypt config.xml -o new_romfile.cfg
 
+# a copy that is safe to paste into an issue
+romfile redact config.xml -o config.redacted.xml
+
 # machine-readable header info
 romfile info romfile.cfg --json
 ```
 
 The config comes out as plain `<ROMFILE>…</ROMFILE>` XML/`name=value` text.
-Subcommands: `info solve encrypt decrypt try findkey report`. Data is written to
-stdout; notes/keys go to stderr. Exit codes: `0` ok, `1` failure, `2` usage.
+Subcommands: `info solve encrypt decrypt try findkey report redact unpack`. Data is
+written to stdout; notes/keys go to stderr. Exit codes: `0` ok, `1` failure, `2` usage.
 
 ### Verified correct (not just "looks like XML")
 
@@ -141,10 +145,10 @@ the same `2RDH` + LZMA layout (`EG_1.00b15`, image size 22,732,500), so the upgr
 is the flash image plus a signature, nothing more.
 
 ```bash
-python tools/unpack_image.py tclinux_EG_1.00b28.sig.bin -o out/
+romfile unpack tclinux_EG_1.00b28.sig.bin -o out/
 # -> out/image.bin (kernel+ramdisk), out/rootfs.squashfs, out/rootfs/ (needs 7z)
 
-python tools/unpack_image.py tclinux_EG_1.00b28.sig.bin --list   # report only
+romfile unpack tclinux_EG_1.00b28.sig.bin --list   # report only
 ```
 
 On `EG_1.00b28` that yields a 15,005,504-byte MIPS kernel+initramfs (Linux 3.18.21) and
@@ -160,8 +164,8 @@ affect extraction — nothing here is signed *and* encrypted.
 
 AU builds still use the `buildImage.sh` scheme: `4RDH` at offset 0 with an AES-128-CBC
 payload (key `11223344556677889900aabbccddeeff`, IV `a5…`). EG dropped it.
-`tools/unpack_image.py` detects that case, prints the decrypt parameters and exits `2`
-instead of decompressing noise.
+`romfile unpack` detects that case, prints the decrypt parameters and exits `2` instead
+of decompressing noise.
 
 Note that image encryption and config encryption are unrelated: the AU image is
 encrypted while its config is stored in plaintext, and the EG image is plaintext while
@@ -197,20 +201,22 @@ The installed `romfile` command (package `dlink_romfile`, source in `src/`):
 | `romfile decrypt` | decrypt with an explicit `--key`/`--iv`/`--mode` |
 | `romfile try` | brute a candidate key list |
 | `romfile findkey` | harvest keys from a firmware rootfs/binary and try each |
-| `romfile report` | readable summary of a plaintext config (masks secrets unless `--show-secrets`; `--json`) |
+| `romfile report` | readable summary of a plaintext config (masks credentials, hostnames and addresses unless `--show-secrets`; `--json`) |
+| `romfile redact` | write a shareable copy of a plaintext config, sensitive values replaced with `REDACTED` |
+| `romfile unpack` | unpack a firmware image: RSA signature + `2RDH` + LZMA + SquashFS (`--list` to report only) |
 
-Standalone helpers in `tools/` (not part of the installed package):
+Standalone helpers in `tools/` — device access, not part of the installed package:
 
 | file | purpose |
 |------|---------|
-| `tools/unpack_image.py` | unpack a firmware image: RSA signature + `2RDH` + LZMA + SquashFS |
-| `tools/redact_config.py` | mask secrets in a decrypted config so it can be shared |
 | `tools/fetch_live_config.py` | pull the plaintext running config the b15 web server serves |
 | `tools/telnet_exec.py` | run one command over telnet (raw-socket; Py3.13+ has no telnetlib) |
 | `tools/tftp_recv.py` | one-shot TFTP receiver, to pull a file off the device |
+| `tools/redact_config.py` | shim for `romfile redact`, for running from a checkout |
+| `tools/unpack_image.py` | shim for `romfile unpack`, for running from a checkout |
 
-The last three need a live device; the first two work offline on files you already
-have.
+The first three need a live device; the two shims are equivalent to the installed
+commands.
 
 Requires `openssl` on PATH. No third-party Python runtime dependencies.
 
@@ -235,7 +241,7 @@ codes, and `--json` on `info`/`report` emits exactly one JSON document on stdout
 
 ```bash
 uv sync          # install with the dev group (pytest)
-uv run pytest -q # 15 tests: one behavioural test per subcommand + the redaction tool
+uv run pytest -q # 20 tests: behaviour per subcommand, redaction, masking
 uv build         # wheel + sdist in dist/
 ```
 
@@ -261,14 +267,14 @@ accounts, DDNS and SNMP secrets, the serial number, MACs, the WAN address and th
 hostnames of the machines on your network. Treat every `romfile.cfg` and every
 `config.xml` derived from one as secret.
 
-`romfile report` masks secret-looking attributes by default (`--show-secrets` is the
-opt-in), but that masking is for reading on screen, not for producing a file you can
-post. For that:
+`romfile report` masks credentials, hostnames and addresses by default (`--show-secrets`
+is the opt-in), but that masking is for reading on screen, not for producing a file you
+can post. For that:
 
 ```bash
 romfile solve romfile.cfg -o config.xml
-python tools/redact_config.py config.xml -o config.redacted.xml
-# wrote config.redacted.xml (74420 bytes, 142 values masked across 51 attributes)
+romfile redact config.xml -o config.redacted.xml
+# [redact] 109 values across 46 attributes masked
 ```
 
 It replaces the values of password/PSK/RADIUS/SNMP attributes, usernames, SSIDs,
@@ -278,6 +284,10 @@ like illegal entity refs — so `romfile report` still renders it the same way a
 still useful as a structural reference. `--keep-ssid`, `--keep-macs` and `--keep-ips`
 relax it when those do not identify you. Vendor/ISP constants (`www.dlink.com`, the NTP
 server, the APN profile) are deliberately left alone.
+
+`report` and `redact` share one policy (`src/dlink_romfile/redact.py`), so a value that
+`redact` removes can never be printed in the clear by `report` — including the `--json`
+form.
 
 `*.cfg`, `*.bin`, `input/`, `work/` and `secrets/` are gitignored here. That only
 protects `git add .` — it does nothing for a snippet pasted into an issue, which is how

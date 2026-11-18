@@ -1,4 +1,5 @@
-"""Command-line interface for ``romfile`` -- decrypt/inspect/re-pack DSL-X1852E configs.
+"""Command-line interface for ``romfile`` -- decrypt/inspect/re-pack DSL-X1852E configs
+and unpack its firmware images.
 
 Data goes to stdout; notes, warnings and errors go to stderr. ``main(argv)`` returns
 an exit code (0 ok, 1 failure, 2 usage). Subcommands dispatch through ``COMMANDS``.
@@ -12,7 +13,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
-from . import core, report
+from . import core, redact, report, unpack
 
 
 def _err(msg: str) -> None:
@@ -57,6 +58,11 @@ def cmd_solve(a) -> int:
 
 def cmd_encrypt(a) -> int:
     pt = Path(a.file).read_bytes()
+    score = core.looks_like_config(pt)
+    if score <= 0.95 and not a.force:
+        _err(f"{a.file} does not look like a config (printable={score:.3f}); "
+             "a backup built from it will not restore. Use --force to override")
+        return 2
     logical = a.length if a.length is not None else len(pt)
     out = a.output or (a.file + ".romfile.cfg")
     packed = core.pack_romfile(pt, logical)
@@ -199,12 +205,36 @@ def _mask_data(data: dict) -> dict:
         for label, attrs in items:
             masked = {}
             for k, v in attrs.items():
-                if report.SECRET_HINT.search(k) and v not in ("", "0", "No", "None"):
-                    v = report.mask(v)
+                if redact.classify(k.lstrip("_"), v):
+                    v = redact.mask(v)
                 masked[k] = v
             new_items.append([label, masked])
         out[sect] = new_items
     return out
+
+
+def cmd_redact(a) -> int:
+    text = Path(a.file).read_bytes().decode("latin-1")
+    if not text.lstrip().startswith("<ROMFILE>"):
+        _err(f"{a.file} is not a plaintext config (expected <ROMFILE>); "
+             "run `romfile solve` first")
+        return 2
+    out, counts = redact.redact_text(text, a.keep_ssid, a.keep_macs, a.keep_ips)
+    dest = Path(a.output or (a.file + ".redacted.xml"))
+    dest.write_bytes(out.encode("latin-1"))
+    print(f"[redact] {sum(counts.values())} values across {len(counts)} attributes masked",
+          file=sys.stderr)
+    print(dest)
+    return 0
+
+
+def cmd_unpack(a) -> int:
+    outdir = None if a.list else a.outdir
+    rc = unpack.unpack(a.image, outdir, do_extract=not a.no_extract,
+                       log=lambda m: print(m, file=sys.stderr))
+    if rc == 0 and outdir:
+        print(outdir)
+    return rc
 
 
 COMMANDS = {
@@ -215,12 +245,15 @@ COMMANDS = {
     "try": cmd_try,
     "findkey": cmd_findkey,
     "report": cmd_report,
+    "redact": cmd_redact,
+    "unpack": cmd_unpack,
 }
 
 
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="romfile",
-                                 description="Decrypt, inspect and re-pack D-Link DSL-X1852E romfile.cfg")
+                                 description="Inspect, decrypt and re-pack D-Link "
+                                             "DSL-X1852E configs, and unpack its firmware")
     ap.add_argument("--version", action="version", version=f"romfile {__version__}")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -234,6 +267,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("file"); p.add_argument("-o", "--output")
     p.add_argument("--length", type=int, help="logical length for the header (default: file size)")
     p.add_argument("--verify-against", help="assert output is byte-identical to this file")
+    p.add_argument("--force", action="store_true", help="pack even if the input is not text")
 
     p = sub.add_parser("decrypt", help="decrypt with an explicit key")
     p.add_argument("file"); p.add_argument("-o", "--output")
@@ -252,6 +286,18 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("report", help="readable summary of a plaintext config")
     p.add_argument("file"); p.add_argument("--show-secrets", action="store_true")
     p.add_argument("--section", action="append"); p.add_argument("--json", action="store_true")
+
+    p = sub.add_parser("redact", help="write a shareable copy of a plaintext config")
+    p.add_argument("file"); p.add_argument("-o", "--output")
+    p.add_argument("--keep-ssid", action="store_true", help="leave SSID names alone")
+    p.add_argument("--keep-macs", action="store_true", help="leave MAC addresses alone")
+    p.add_argument("--keep-ips", action="store_true", help="leave IPv4 addresses alone")
+
+    p = sub.add_parser("unpack", help="unpack a firmware image (RSA + 2RDH + LZMA + SquashFS)")
+    p.add_argument("image"); p.add_argument("-o", "--outdir")
+    p.add_argument("--list", action="store_true", help="report only, write nothing")
+    p.add_argument("--no-extract", action="store_true",
+                   help="carve the SquashFS but do not run 7z")
 
     return ap
 

@@ -1,0 +1,35 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+
+      # Windows runners have openssl inside Git for Windows, but not on PATH.
+      - name: Put openssl on PATH
+        shell: bash
+        run: |
+          if ! command -v openssl >/dev/null 2>&1; then
+            echo "C:/Program Files/Git/usr/bin" >> "$GITHUB_PATH"
+          fi
+
+      # The AES primitive shells out to openssl; a missing binary makes the suite
+      # skip instead of fail, so assert it is there before testing.
+      - name: openssl must be present
+        run: uv run --no-project python -c "import shutil,sys; sys.exit(0 if shutil.which('openssl') else 1)"
+
+      - run: uv sync --python ${{ matrix.python }}
+      - run: uv run pytest -q
+      - run: uv build
