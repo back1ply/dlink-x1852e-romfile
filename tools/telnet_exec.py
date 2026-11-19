@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
-"""Minimal telnet client: log in to a BusyBox device and run one command.
+"""Minimal telnet client: log in to the DSL-X1852E and run one command.
 
 Python 3.13+ removed telnetlib, so this speaks just enough of the protocol
 (refuse every IAC option negotiation) over a raw socket.
 
     python telnet_exec.py "id; uname -a"
-    python telnet_exec.py --host 192.168.1.1 --user admin --passwd '<yours>' "cat /proc/mtd"
-
-Credentials are device-specific: read them from your own router's config
-(the DSL-X1852E serves its plaintext config at http://<router>/romfile.cfg --
-look at <Account>/<TelnetEntry> for telnet_username / telnet_passwd). Nothing
-is hardcoded here.
+    python telnet_exec.py --host 192.168.1.1 --user root "cat /proc/mtd"
 
 Prints everything the device sends after login. Read-only by default -- it only
 runs the command you pass.
+
+The password comes from --passwd, the X1852E_TELNET_PASS environment variable, or
+secrets.local.env (gitignored) -- never from this file. Pass --passwd "" when the
+account really has an empty password.
 """
 import argparse
 import os
@@ -83,13 +82,13 @@ def main():
     ap.add_argument("--host", default=None)
     ap.add_argument("--port", type=int, default=23)
     ap.add_argument("--user", default=None)
-    ap.add_argument("--passwd", default=None, help="telnet password (read it from your own config)")
+    ap.add_argument("--passwd", default=None)
     ap.add_argument("--marker", default="___DONE___")
     args = ap.parse_args()
 
     host = get("X1852E_HOST", args.host, "192.168.1.1")
-    user = get("X1852E_TELNET_USER", args.user, "admin")
-    passwd = get("X1852E_TELNET_PASS", args.passwd, "")
+    user = get("X1852E_TELNET_USER", args.user, required=True)
+    passwd = get("X1852E_TELNET_PASS", args.passwd, required=True)
 
     s = socket.create_connection((host, args.port), timeout=10)
 
@@ -115,6 +114,7 @@ def main():
     s.close()
 
     text = out.decode("latin-1", "replace")
+    # trim the trailing marker line
     idx = text.rfind(args.marker)
     if idx != -1:
         text = text[:idx]
