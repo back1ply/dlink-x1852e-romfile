@@ -95,8 +95,8 @@ firmware calls as `azencrypt dec <in> <out>`). Disassembly of its `main()` shows
 ASCII key passed to `aes_expand_key` and the static `.data` IV passed to
 `aes_cbc_decrypt_blocks`. The header magic was confirmed as `crc32(ciphertext)`.
 
-`romfile_tool.py` also has a `findkey` mode that harvests candidate keys from a
-firmware rootfs, for related models.
+`romfile findkey` harvests candidate keys from a firmware rootfs and tries each,
+for related models.
 
 ### Scope — the key is a vendor-wide constant (verified on a second model)
 
