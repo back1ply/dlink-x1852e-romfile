@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+title: "dlink-x1852e-romfile: D-Link DSL-X1852E romfile.cfg decryptor and firmware unpacker"
+message: "If you use this tool or its format writeup in your research, please cite it."
+type: software
+authors:
+  - alias: back1ply
+repository-code: "https://github.com/back1ply/dlink-x1852e-romfile"
+url: "https://github.com/back1ply/dlink-x1852e-romfile"
+abstract: >-
+  First public tool and format writeup for the D-Link DSL-X1852E VDSL/ADSL
+  modem-router (EG region firmware). Decrypts, inspects and re-packs the device's
+  AES-128-CBC-encrypted romfile.cfg configuration backup using a key recovered from
+  the firmware, and documents and unpacks the EG firmware container (RSA-2048
+  signature + 2RDH + LZMA + SquashFS).
+keywords:
+  - d-link
+  - dsl-x1852e
+  - romfile
+  - trendchip
+  - airoha
+  - firmware
+  - reverse-engineering
+license: MIT
+version: 0.1.0
