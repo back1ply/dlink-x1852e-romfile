@@ -230,13 +230,21 @@ Standalone helpers in `tools/` — device access, not part of the installed pack
 | file | purpose |
 |------|---------|
 | `tools/fetch_live_config.py` | pull the plaintext running config the b15 web server serves |
+| `tools/acl_toggle.py` | flip the Telnet/LAN ACL rule (`Entry2`) via the web UI — `show` / `on` / `off` |
 | `tools/telnet_exec.py` | run one command over telnet (raw-socket; Py3.13+ has no telnetlib) |
+| `tools/pull_from_router.py` | tiny HTTP receiver so the router can push files (dumps) back to this PC |
 | `tools/tftp_recv.py` | one-shot TFTP receiver, to pull a file off the device |
+| `tools/router_secrets.py` | shared credential loader (flag > env var > `secrets.local.env`) for the device tools |
 | `tools/redact_config.py` | shim for `romfile redact`, for running from a checkout |
 | `tools/unpack_image.py` | shim for `romfile unpack`, for running from a checkout |
 
-The first three need a live device; the two shims are equivalent to the installed
-commands.
+The device tools (`fetch_live_config`, `acl_toggle`, `telnet_exec`, `pull_from_router`,
+`tftp_recv`) need a live unit; the two shims are equivalent to the installed commands.
+`fetch_live_config`, `acl_toggle` and `telnet_exec` resolve host and credentials through
+`router_secrets.py` — precedence is CLI flag > environment variable > `secrets.local.env`.
+Copy `secrets.example.env` to `secrets.local.env` (gitignored) and fill it in, or export
+`X1852E_HOST` / `X1852E_WEB_USER` / `X1852E_WEB_PASS` / `X1852E_TELNET_USER` /
+`X1852E_TELNET_PASS`. No credentials are stored in the repo.
 
 Requires `openssl` on PATH. No third-party Python runtime dependencies.
 

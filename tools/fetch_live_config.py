@@ -15,14 +15,18 @@ container header 36 e2 8b dc instead of `<ROMFILE>`; this script says so and sto
 
 import argparse
 import os
-import subprocess
 import sys
 import urllib.error
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROJECT = os.path.normpath(os.path.join(HERE, ".."))
+sys.path.insert(0, HERE)                        # router_secrets (device tools)
+sys.path.insert(0, os.path.join(PROJECT, "src"))  # dlink_romfile (report)
+from router_secrets import get  # noqa: E402
+
 MAGIC = bytes.fromhex("36e28bdc")
+DEFAULT_HOST = "192.168.1.1"
 
 
 def fetch(host, timeout=20):
@@ -34,17 +38,19 @@ def fetch(host, timeout=20):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("host", nargs="?", default="192.168.1.1")
+    ap.add_argument("host", nargs="?", default=None)
     ap.add_argument("-o", "--output", default=os.path.join(PROJECT, "input", "romfile_live.cfg"))
     ap.add_argument("--show-secrets", action="store_true")
     ap.add_argument("--keep-only", action="store_true")
     args = ap.parse_args()
 
+    host = get("X1852E_HOST", args.host, DEFAULT_HOST)
+
     try:
-        url, data = fetch(args.host)
+        url, data = fetch(host)
     except (urllib.error.URLError, OSError) as exc:
-        print("could not reach %s/romfile.cfg: %s" % (args.host, exc), file=sys.stderr)
-        print("are you on the router's LAN? try: Test-NetConnection %s -Port 80" % args.host,
+        print("could not reach %s/romfile.cfg: %s" % (host, exc), file=sys.stderr)
+        print("are you on the router's LAN? try: Test-NetConnection %s -Port 80" % host,
               file=sys.stderr)
         return 1
 
@@ -66,11 +72,18 @@ def main():
     if args.keep_only:
         return 0
 
-    report = os.path.join(HERE, "romfile_report.py")
-    cmd = [sys.executable, report, args.output]
+    # Report via the installed package (replaces the old tools/romfile_report.py,
+    # now `romfile report`); falls back silently if the package isn't importable.
+    try:
+        from dlink_romfile.cli import main as romfile_main
+    except ImportError:
+        print("(install the package or run `romfile report %s` for a summary)" % args.output,
+              file=sys.stderr)
+        return 0
+    report_args = ["report", args.output]
     if args.show_secrets:
-        cmd.append("--show-secrets")
-    subprocess.call(cmd)
+        report_args.append("--show-secrets")
+    romfile_main(report_args)
     return 0
 
 

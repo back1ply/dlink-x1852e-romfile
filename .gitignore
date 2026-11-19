@@ -8,6 +8,7 @@ incoming/
 input/
 work/
 secrets/
+secrets.local.env
 
 # Vendor firmware binaries (copyright; reference by hash only)
 azencrypt

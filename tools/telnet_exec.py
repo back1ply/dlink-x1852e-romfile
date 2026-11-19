@@ -16,9 +16,13 @@ Prints everything the device sends after login. Read-only by default -- it only
 runs the command you pass.
 """
 import argparse
+import os
 import socket
 import sys
 import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from router_secrets import get  # noqa: E402
 
 IAC, DONT, DO, WONT, WILL, SB, SE = 255, 254, 253, 252, 251, 250, 240
 
@@ -76,19 +80,23 @@ def recv_until(sock, patterns, timeout=8.0):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("command")
-    ap.add_argument("--host", default="192.168.1.1")
+    ap.add_argument("--host", default=None)
     ap.add_argument("--port", type=int, default=23)
-    ap.add_argument("--user", default="admin")
-    ap.add_argument("--passwd", default="", help="telnet password (read it from your own config)")
+    ap.add_argument("--user", default=None)
+    ap.add_argument("--passwd", default=None, help="telnet password (read it from your own config)")
     ap.add_argument("--marker", default="___DONE___")
     args = ap.parse_args()
 
-    s = socket.create_connection((args.host, args.port), timeout=10)
+    host = get("X1852E_HOST", args.host, "192.168.1.1")
+    user = get("X1852E_TELNET_USER", args.user, "admin")
+    passwd = get("X1852E_TELNET_PASS", args.passwd, "")
+
+    s = socket.create_connection((host, args.port), timeout=10)
 
     recv_until(s, [b"login:", b"username:"], timeout=8)
-    s.sendall(args.user.encode() + b"\n")
+    s.sendall(user.encode() + b"\n")
     recv_until(s, [b"password:"], timeout=6)
-    s.sendall(args.passwd.encode() + b"\n")
+    s.sendall(passwd.encode() + b"\n")
     # wait for a shell prompt
     banner, _ = recv_until(s, [b"#", b"$", b"incorrect", b"wrong", b"fail"], timeout=8)
     sys.stderr.write("--- login banner ---\n")
