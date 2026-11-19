@@ -29,8 +29,13 @@ primitive). No Python dependencies; 7z is optional, for extracting a firmware ro
 # decrypt a backup you exported from your own router
 romfile solve romfile.cfg -o config.xml
 
-# edit config.xml, then re-pack it into a restorable backup
+# read / change one value by path (no hand-editing XML), then re-pack
+romfile get config.xml ACL/Entry2/Activate          # -> No
+romfile set config.xml ACL/Entry2/Activate Yes      # byte-exact, in place
 romfile encrypt config.xml -o new_romfile.cfg
+
+# see exactly what changed between two backups (secrets masked)
+romfile diff old_config.xml config.xml
 
 # a copy that is safe to paste into an issue
 romfile redact config.xml -o config.redacted.xml
@@ -40,7 +45,7 @@ romfile info romfile.cfg --json
 ```
 
 The config comes out as plain `<ROMFILE>…</ROMFILE>` XML/`name=value` text.
-Subcommands: `info solve encrypt decrypt try findkey report redact unpack`. Data is
+Subcommands: `info solve encrypt decrypt try findkey report get set diff redact unpack`. Data is
 written to stdout; notes/keys go to stderr. Exit codes: `0` ok, `1` failure, `2` usage.
 
 ### Verified correct (not just "looks like XML")
@@ -222,6 +227,9 @@ The installed `romfile` command (package `dlink_romfile`, source in `src/`):
 | `romfile try` | brute a candidate key list |
 | `romfile findkey` | harvest keys from a firmware rootfs/binary and try each |
 | `romfile report` | readable summary of a plaintext config (masks credentials, hostnames and addresses unless `--show-secrets`; `--json`) |
+| `romfile get` | read a value by path — `Section`, `Section/Element`, or `Section/Element/attr` (`--json`) |
+| `romfile set` | change one value in place by targeted byte-exact substitution (`-o` to write a copy) |
+| `romfile diff` | compare two decrypted configs — added/removed/changed attributes (`--json`, `--exit-code`, `--show-secrets`) |
 | `romfile redact` | write a shareable copy of a plaintext config, sensitive values replaced with `REDACTED` |
 | `romfile unpack` | unpack a firmware image: RSA signature + `2RDH` + LZMA + SquashFS (`--list` to report only) |
 
@@ -262,8 +270,10 @@ command — same subcommands and flags:
 ### For agents / CI
 
 Non-interactive by design: no prompts, nothing read from stdin, deterministic exit
-codes, and `--json` on `info`/`report` emits exactly one JSON document on stdout. Run
-`romfile <sub> --help` for the full flag list.
+codes, and `--json` on `info`/`report`/`get`/`diff` emits exactly one JSON document on
+stdout. `get`/`set` give a stable, path-addressed way to read and edit single values
+without parsing XML; `diff --exit-code` returns `1` when two configs differ, so a change
+can gate a pipeline. Run `romfile <sub> --help` for the full flag list.
 
 ## Development
 

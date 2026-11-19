@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
-from . import core, redact, report, unpack
+from . import config, core, redact, report, unpack
 
 
 def _err(msg: str) -> None:
@@ -228,6 +228,100 @@ def cmd_redact(a) -> int:
     return 0
 
 
+def _require_plaintext(text: str, file: str) -> None:
+    if not text.lstrip().startswith("<ROMFILE>"):
+        raise config.PathError(f"{file} is not a plaintext config (expected <ROMFILE>); "
+                               "run `romfile solve` first")
+
+
+def _mask_get(obj):
+    if not isinstance(obj, dict):
+        return obj
+    out = {}
+    for k, v in obj.items():
+        if isinstance(v, dict):
+            out[k] = _mask_get(v)
+        elif redact.classify(k.lstrip("_"), v):
+            out[k] = redact.mask(v)
+        else:
+            out[k] = v
+    return out
+
+
+def cmd_get(a) -> int:
+    text = Path(a.file).read_bytes().decode("latin-1")
+    try:
+        _require_plaintext(text, a.file)
+        val = config.get(text, a.path)
+    except config.PathError as e:
+        _err(str(e)); return 2
+    if isinstance(val, str):
+        print(json.dumps(val) if a.json else val)
+        return 0
+    data = val if a.show_secrets else _mask_get(val)
+    if a.json:
+        print(json.dumps(data, indent=2))
+    else:
+        for k, v in data.items():
+            if isinstance(v, dict):
+                print(f"[{k}]")
+                for ak, av in v.items():
+                    print(f"  {ak.lstrip('_')}={av}")
+            else:
+                print(f"{k.lstrip('_')}={v}")
+    return 0
+
+
+def cmd_set(a) -> int:
+    raw = Path(a.file).read_bytes()
+    text = raw.decode("latin-1")
+    try:
+        _require_plaintext(text, a.file)
+        new_text, old, label = config.set_value(text, a.path, a.value)
+    except config.PathError as e:
+        _err(str(e)); return 2
+    if old == a.value:
+        print(f"[set] {label} unchanged (already {a.value!r})", file=sys.stderr)
+    new_bytes = new_text.encode("latin-1")
+    dest = Path(a.output or a.file)
+    dest.write_bytes(new_bytes)
+    attr = a.path.split("/")[-1].lstrip("_")
+    print(f"[set] {label} {attr}: {old} -> {a.value}  ({len(new_bytes) - len(raw):+d} bytes)",
+          file=sys.stderr)
+    print(dest)
+    return 0
+
+
+def _mask_diff(d: dict) -> dict:
+    out: dict = {}
+    for section, groups in d.items():
+        g = {"changed": [], "added": [], "removed": []}
+        for item in groups["changed"]:
+            attrs = {}
+            for attr, (old, new) in item["attrs"].items():
+                if redact.classify(attr.lstrip("_"), old or new or ""):
+                    old = None if old is None else redact.mask(old)
+                    new = None if new is None else redact.mask(new)
+                attrs[attr] = [old, new]
+            g["changed"].append({"element": item["element"], "attrs": attrs})
+        for bucket in ("added", "removed"):
+            g[bucket] = [{"element": it["element"], "attrs": _mask_get(it["attrs"])}
+                         for it in groups[bucket]]
+        out[section] = g
+    return out
+
+
+def cmd_diff(a) -> int:
+    ta = Path(a.a).read_bytes().decode("latin-1")
+    tb = Path(a.b).read_bytes().decode("latin-1")
+    d = config.diff(ta, tb)
+    if a.json:
+        print(json.dumps(d if a.show_secrets else _mask_diff(d), indent=2))
+    else:
+        print(config.render_diff(d, show_secrets=a.show_secrets))
+    return 1 if (d and a.exit_code) else 0
+
+
 def cmd_unpack(a) -> int:
     outdir = None if a.list else a.outdir
     rc = unpack.unpack(a.image, outdir, do_extract=not a.no_extract,
@@ -245,6 +339,9 @@ COMMANDS = {
     "try": cmd_try,
     "findkey": cmd_findkey,
     "report": cmd_report,
+    "get": cmd_get,
+    "set": cmd_set,
+    "diff": cmd_diff,
     "redact": cmd_redact,
     "unpack": cmd_unpack,
 }
@@ -286,6 +383,24 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("report", help="readable summary of a plaintext config")
     p.add_argument("file"); p.add_argument("--show-secrets", action="store_true")
     p.add_argument("--section", action="append"); p.add_argument("--json", action="store_true")
+
+    p = sub.add_parser("get", help="read a config value by path (Section/Element/attr)")
+    p.add_argument("file")
+    p.add_argument("path", help="e.g. Account/Entry0/web_passwd, WLan, Lan/Entry0")
+    p.add_argument("--show-secrets", action="store_true", help="do not mask secrets in bulk output")
+    p.add_argument("--json", action="store_true")
+
+    p = sub.add_parser("set", help="change one config value in place (targeted, byte-exact)")
+    p.add_argument("file")
+    p.add_argument("path", help="Section/Element/attr, or Section/attr for a section-tag attribute")
+    p.add_argument("value", help="new attribute value (no double quotes)")
+    p.add_argument("-o", "--output", help="write here instead of editing in place")
+
+    p = sub.add_parser("diff", help="compare two decrypted configs")
+    p.add_argument("a"); p.add_argument("b")
+    p.add_argument("--show-secrets", action="store_true", help="reveal secret values in the diff")
+    p.add_argument("--exit-code", action="store_true", help="exit 1 when there are differences")
+    p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("redact", help="write a shareable copy of a plaintext config")
     p.add_argument("file"); p.add_argument("-o", "--output")
