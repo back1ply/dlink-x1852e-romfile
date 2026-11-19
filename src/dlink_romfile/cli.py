@@ -12,8 +12,7 @@ import re
 import sys
 from pathlib import Path
 
-from . import __version__
-from . import config, core, redact, report, unpack
+from . import __version__, config, core, redact, report, unpack
 
 
 def _err(msg: str) -> None:
@@ -322,6 +321,92 @@ def cmd_diff(a) -> int:
     return 1 if (d and a.exit_code) else 0
 
 
+def cmd_fetch(a) -> int:
+    from .device import DeviceError, live, secrets
+    host = secrets.get("X1852E_HOST", a.host, "192.168.1.1")
+    try:
+        data = live.fetch(host)
+    except (OSError, DeviceError) as e:
+        _err(f"could not reach {host}/romfile.cfg: {e}")
+        print(f"are you on the router's LAN? try: ping {host}", file=sys.stderr)
+        return 1
+    kind = live.classify(data)
+    if kind == "encrypted":
+        _err(f"router returned the *encrypted* container ({len(data)} bytes); "
+             "this firmware no longer serves the plaintext config. Run `romfile solve` on it")
+        return 2
+    if kind != "plaintext":
+        _err(f"unexpected payload ({len(data)} bytes): {data[:32]!r}")
+        return 3
+    out = a.output or "romfile_live.cfg"
+    Path(out).write_bytes(data)
+    print(f"[fetch] {len(data)} bytes of plaintext config -> {out}", file=sys.stderr)
+    print(out)
+    if not a.no_report:
+        text, warn = report.render(data.decode("utf-8", "replace"), show_secrets=a.show_secrets)
+        if warn:
+            print(f"note: {warn}", file=sys.stderr)
+        print(text)
+    return 0
+
+
+def cmd_acl(a) -> int:
+    from .device import DeviceError, acl, secrets
+    try:
+        r = acl.Router(secrets.get("X1852E_HOST", a.host, "192.168.1.1"),
+                       secrets.get("X1852E_WEB_USER", a.user, "root"),
+                       secrets.get("X1852E_WEB_PASS", a.passwd, required=True))
+        r.login()
+        if a.action in ("on", "off"):
+            status = r.post_acl("Yes" if a.action == "on" else "No")
+            print(f"posted ACL update (http {status}): Telnet/LAN -> "
+                  f"{'Yes' if a.action == 'on' else 'No'}", file=sys.stderr)
+        rules = acl.parse_rules(r.acl_page())
+    except (OSError, DeviceError) as e:
+        _err(str(e)); return 1
+    if not rules:
+        _err("could not parse the ACL rule table"); return 1
+    for i, rule in enumerate(rules):
+        mark = "  <-- telnet" if (rule["application"] == "Telnet"
+                                  and rule["interface"] == "LAN") else ""
+        print(f"  [{i}] active={rule['activate']:<3} {rule['application']:<6} "
+              f"{rule['interface']:<3} {rule['src_begin']}-{rule['src_end']}{mark}")
+    return 0
+
+
+def cmd_telnet(a) -> int:
+    from .device import DeviceError, secrets, telnet
+    try:
+        out, banner = telnet.run(
+            secrets.get("X1852E_HOST", a.host, "192.168.1.1"),
+            secrets.get("X1852E_TELNET_USER", a.user, required=True),
+            secrets.get("X1852E_TELNET_PASS", a.passwd, required=True),
+            a.command, port=a.port)
+    except (OSError, DeviceError) as e:
+        _err(str(e)); return 1
+    print("--- login banner ---\n" + banner + "\n--------------------", file=sys.stderr)
+    sys.stdout.write(out)
+    return 0
+
+
+def cmd_recv(a) -> int:
+    from .device import receivers
+    receivers.http_receiver(a.outdir, port=a.port, bind=a.bind,
+                            log=lambda m: print(m, file=sys.stderr))
+    return 0
+
+
+def cmd_tftp(a) -> int:
+    from .device import DeviceError, receivers
+    try:
+        dest = receivers.tftp_receiver(a.outdir, port=a.port, bind=a.bind, timeout=a.timeout,
+                                       log=lambda m: print(m, file=sys.stderr))
+    except DeviceError as e:
+        _err(str(e)); return 1
+    print(dest)
+    return 0
+
+
 def cmd_unpack(a) -> int:
     outdir = None if a.list else a.outdir
     rc = unpack.unpack(a.image, outdir, do_extract=not a.no_extract,
@@ -344,6 +429,11 @@ COMMANDS = {
     "diff": cmd_diff,
     "redact": cmd_redact,
     "unpack": cmd_unpack,
+    "fetch": cmd_fetch,
+    "acl": cmd_acl,
+    "telnet": cmd_telnet,
+    "recv": cmd_recv,
+    "tftp": cmd_tftp,
 }
 
 
@@ -413,6 +503,31 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--list", action="store_true", help="report only, write nothing")
     p.add_argument("--no-extract", action="store_true",
                    help="carve the SquashFS but do not run 7z")
+
+    # --- live-device subcommands (talk to a unit on your LAN) ---------------
+    p = sub.add_parser("fetch", help="pull the config the web server serves at /romfile.cfg")
+    p.add_argument("host", nargs="?", help="default: X1852E_HOST or 192.168.1.1")
+    p.add_argument("-o", "--output", help="default: romfile_live.cfg")
+    p.add_argument("--show-secrets", action="store_true")
+    p.add_argument("--no-report", action="store_true", help="just save, do not print a report")
+
+    p = sub.add_parser("acl", help="show/toggle the Telnet-on-LAN ACL rule via the web UI")
+    p.add_argument("action", choices=["show", "on", "off"])
+    p.add_argument("--host"); p.add_argument("--user"); p.add_argument("--passwd")
+
+    p = sub.add_parser("telnet", help="run one command over telnet (raw-socket)")
+    p.add_argument("command")
+    p.add_argument("--host"); p.add_argument("--user"); p.add_argument("--passwd")
+    p.add_argument("--port", type=int, default=23)
+
+    p = sub.add_parser("recv", help="HTTP receiver so the router can POST files back")
+    p.add_argument("-o", "--outdir", default="incoming")
+    p.add_argument("--port", type=int, default=8080); p.add_argument("--bind", default="0.0.0.0")
+
+    p = sub.add_parser("tftp", help="one-shot TFTP receiver for a single router upload")
+    p.add_argument("-o", "--outdir", default="incoming")
+    p.add_argument("--port", type=int, default=6969); p.add_argument("--bind", default="0.0.0.0")
+    p.add_argument("--timeout", type=float, default=120.0)
 
     return ap
 

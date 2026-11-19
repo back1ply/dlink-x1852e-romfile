@@ -45,7 +45,8 @@ romfile info romfile.cfg --json
 ```
 
 The config comes out as plain `<ROMFILE>…</ROMFILE>` XML/`name=value` text.
-Subcommands: `info solve encrypt decrypt try findkey report get set diff redact unpack`. Data is
+Subcommands: `info solve encrypt decrypt try findkey report get set diff redact unpack`,
+plus live-device commands `fetch acl telnet recv tftp`. Data is
 written to stdout; notes/keys go to stderr. Exit codes: `0` ok, `1` failure, `2` usage.
 
 ### Verified correct (not just "looks like XML")
@@ -214,9 +215,10 @@ and firmware branches were not examined. If yours differs, `romfile info` and `r
 unpack` will show it quickly. Likewise the telnet default is what one b28 image ships,
 not a survey of deployed units.
 
-## Commands & tools
+## Commands
 
-The installed `romfile` command (package `dlink_romfile`, source in `src/`):
+Everything is a subcommand of the installed `romfile` command (package `dlink_romfile`,
+source in `src/`). Offline, file/firmware commands:
 
 | command | purpose |
 |---------|---------|
@@ -233,39 +235,40 @@ The installed `romfile` command (package `dlink_romfile`, source in `src/`):
 | `romfile redact` | write a shareable copy of a plaintext config, sensitive values replaced with `REDACTED` |
 | `romfile unpack` | unpack a firmware image: RSA signature + `2RDH` + LZMA + SquashFS (`--list` to report only) |
 
-Standalone helpers in `tools/` — device access, not part of the installed package:
+Live-device commands (they talk to a unit on your LAN; code isolated in
+`dlink_romfile.device`, still standard-library only):
 
-| file | purpose |
-|------|---------|
-| `tools/fetch_live_config.py` | pull the plaintext running config the b15 web server serves |
-| `tools/acl_toggle.py` | flip the Telnet/LAN ACL rule (`Entry2`) via the web UI — `show` / `on` / `off` |
-| `tools/telnet_exec.py` | run one command over telnet (raw-socket; Py3.13+ has no telnetlib) |
-| `tools/pull_from_router.py` | tiny HTTP receiver so the router can push files (dumps) back to this PC |
-| `tools/tftp_recv.py` | one-shot TFTP receiver, to pull a file off the device |
-| `tools/router_secrets.py` | shared credential loader (flag > env var > `secrets.local.env`) for the device tools |
-| `tools/redact_config.py` | shim for `romfile redact`, for running from a checkout |
-| `tools/unpack_image.py` | shim for `romfile unpack`, for running from a checkout |
+| command | purpose |
+|---------|---------|
+| `romfile fetch [host]` | pull the config the web server serves at `/romfile.cfg` (plaintext on b15) and report it |
+| `romfile acl {show,on,off}` | show or flip the Telnet-on-LAN ACL rule (`Entry2`) via the web UI |
+| `romfile telnet "<cmd>"` | run one command over telnet (raw-socket; Py3.13+ has no telnetlib) |
+| `romfile recv` | HTTP receiver so the router can POST/PUT files (dumps) back to this PC |
+| `romfile tftp` | one-shot TFTP receiver for a single BusyBox `tftp -p` upload |
 
-The device tools (`fetch_live_config`, `acl_toggle`, `telnet_exec`, `pull_from_router`,
-`tftp_recv`) need a live unit; the two shims are equivalent to the installed commands.
-`fetch_live_config`, `acl_toggle` and `telnet_exec` resolve host and credentials through
-`router_secrets.py` — precedence is CLI flag > environment variable > `secrets.local.env`.
-Copy `secrets.example.env` to `secrets.local.env` (gitignored) and fill it in, or export
-`X1852E_HOST` / `X1852E_WEB_USER` / `X1852E_WEB_PASS` / `X1852E_TELNET_USER` /
-`X1852E_TELNET_PASS`. No credentials are stored in the repo.
+`fetch`, `acl` and `telnet` resolve host and credentials with precedence
+CLI flag > environment variable > `secrets.local.env` in the working directory (or the
+file named by `X1852E_SECRETS`). Copy `secrets.example.env` to `secrets.local.env`
+(gitignored) and fill it in, or export `X1852E_HOST` / `X1852E_WEB_USER` /
+`X1852E_WEB_PASS` / `X1852E_TELNET_USER` / `X1852E_TELNET_PASS`. No credentials are
+stored in the repo.
 
 Requires `openssl` on PATH. No third-party Python runtime dependencies.
 
-### Migrating from the old script
+### Migrating from the old scripts
 
-The former `romfile_tool.py` and `tools/romfile_report.py` are now the `romfile`
-command — same subcommands and flags:
+The former `romfile_tool.py` and the `tools/*.py` helpers are now `romfile`
+subcommands — same behaviour and flags:
 
 | old | new |
 |-----|-----|
 | `python romfile_tool.py solve x.cfg -o y.xml` | `romfile solve x.cfg -o y.xml` |
-| `python romfile_tool.py encrypt y.xml -o x.cfg` | `romfile encrypt y.xml -o x.cfg` |
 | `python tools/romfile_report.py cfg.xml` | `romfile report cfg.xml` |
+| `python tools/fetch_live_config.py 192.168.1.1` | `romfile fetch 192.168.1.1` |
+| `python tools/acl_toggle.py on` | `romfile acl on` |
+| `python tools/telnet_exec.py "id"` | `romfile telnet "id"` |
+| `python tools/pull_from_router.py` | `romfile recv` |
+| `python tools/tftp_recv.py` | `romfile tftp` |
 
 ### For agents / CI
 
