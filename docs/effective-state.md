@@ -28,6 +28,10 @@ This table mirrors `RULES` in [`src/dlink_romfile/audit.py`](../src/dlink_romfil
 | Telnet | `Account/TelnetEntry.Active` | `ACL[Telnet/LAN].Activate` | flag = Yes **and** ACL = Yes |
 | Samba / SMB | `Samba/Entry0.Active` | `ACL[Samba/LAN].Activate` | flag = Yes **and** ACL = Yes |
 | TFTP | — | `ACL[TFTP/LAN].Activate` | ACL = Yes |
+| FTP | `Account/FtpCommon.Active` | — (inetd; `bftpd` is IPv6-only) | Active = Yes |
+| DLNA / DMS | `DMS/Entry.Enable` | — (media server, port 12345) | Enable = Yes |
+| DNS | `Dproxy/Entry.Active` | `ACL[domain/LAN].Activate` | Active = Yes **and** ACL = Yes |
+| SNMP | `Snmpd/Entry.Active` | — (UDP 161) | Active = Yes |
 | Ping | — | `ACL[Ping/LAN].Activate` | ACL = Yes |
 | TR-069 / CWMP | `Cwmp…Tr069Enable` | `Cwmp…Active` **and** non-empty `Cwmp…acsUrl` | Active = Yes and ACS set |
 | UPnP IGD | `Upnpd/Entry.Active` | — | Active = Yes |
@@ -52,10 +56,14 @@ romfile audit config.xml --exit-code
 romfile audit --live 192.168.1.1
 ```
 
-The `--live` probe runs from your LAN, so it can only confirm **LAN-facing** surfaces; a
-WAN verdict cannot be observed from inside and is reported from the config alone. A
-`** MISMATCH **` row means the config says a LAN service is off but its port answered
-(or vice-versa) — worth investigating.
+The `--live` probe runs from your LAN. It is a **TCP connect** probe, so UDP-only services
+(TFTP, SNMP) are listed in the effective-state table but left out of the reconcile rather
+than reported misleadingly. A WAN surface that *shares* a port with a LAN one (Web uses 80
+for both) is skipped too — an open LAN port can't distinguish WAN exposure from the LAN
+sibling. A WAN surface with its **own** port (TR-069's 7547) is still reconciled, because an
+answer there is the daemon itself. A `** MISMATCH **` row means the config says a service is
+off but its port answered (or vice-versa) — e.g. an SMB or TR-069 listener that keeps
+running despite the config flag being off.
 
 ## Worked example
 

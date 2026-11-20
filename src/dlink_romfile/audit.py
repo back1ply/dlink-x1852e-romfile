@@ -19,10 +19,13 @@ from . import report
 
 TRUTHY = {"yes", "1", "true", "enable", "enabled", "on"}
 
-# surface -> TCP port used by the --live probe
-PORTS = {
-    "Web (WAN)": 80, "Web (LAN)": 80, "Telnet": 23,
-    "Samba/SMB": 445, "TFTP": 69, "TR-069": 7547,
+# surface -> (port, protocol) for the --live probe. Only TCP ports can be verified
+# by a connect probe; UDP services are listed for reference but not reconciled.
+PORTS: dict[str, tuple[int, str]] = {
+    "Web (WAN)": (80, "tcp"), "Web (LAN)": (80, "tcp"), "Telnet": (23, "tcp"),
+    "Samba/SMB": (445, "tcp"), "FTP": (21, "tcp"), "TR-069": (7547, "tcp"),
+    "DLNA": (12345, "tcp"), "DNS": (53, "tcp"),
+    "TFTP": (69, "udp"), "SNMP": (161, "udp"),
 }
 
 
@@ -57,6 +60,11 @@ RULES = [
     Rule("Samba/SMB", "service", "LAN",
          flag=("Samba", "Entry0", "Active"), acl=("Samba", "LAN")),
     Rule("TFTP", "acl", "LAN", acl=("TFTP", "LAN")),
+    Rule("FTP", "plain", "LAN", flag=("Account", "FtpCommon", "Active")),
+    Rule("DLNA", "plain", "LAN", flag=("DMS", "Entry", "Enable")),
+    Rule("DNS", "service", "LAN",
+         flag=("Dproxy", "Entry", "Active"), acl=("domain", "LAN")),
+    Rule("SNMP", "plain", "LAN", flag=("Snmpd", "Entry", "Active")),
     Rule("Ping", "acl", "LAN", acl=("Ping", "LAN")),
     Rule("TR-069", "cwmp", "WAN",
          flag=("Cwmp", "Entry", "Tr069Enable"), nonempty=("Cwmp", "Entry", "acsUrl")),
@@ -251,8 +259,13 @@ def probe_port(host: str, port: int, timeout: float = 1.5) -> bool:
 
 
 def probe_ports(host: str, timeout: float = 1.5) -> dict:
-    """TCP-connect (no data sent) each known surface port; return {surface: open?}."""
-    return {name: probe_port(host, port, timeout) for name, port in PORTS.items()}
+    """TCP-connect (no data sent) each TCP surface port; return {surface: open?}.
+
+    UDP services (TFTP, SNMP) can't be confirmed by a connect probe, so they are
+    omitted here and left out of the reconcile rather than reported misleadingly.
+    """
+    return {name: probe_port(host, port, timeout)
+            for name, (port, proto) in PORTS.items() if proto == "tcp"}
 
 
 def reconcile(results: list[SurfaceResult], observed: dict) -> list[dict]:
@@ -271,11 +284,22 @@ def reconcile(results: list[SurfaceResult], observed: dict) -> list[dict]:
     return rows
 
 
+def _port_shared(name: str) -> bool:
+    """True if another surface listens on the same port (e.g. Web LAN & WAN share 80)."""
+    port = PORTS[name][0]
+    return sum(1 for p, _ in PORTS.values() if p == port) > 1
+
+
 def _reconcilable(r: SurfaceResult, observed: dict) -> bool:
-    """LAN-facing surfaces with a definite verdict and a probed port can be compared."""
-    if r.interface == "WAN" or r.effective is None:
+    """Compare a surface when its port was probed and attributable to it alone.
+
+    A WAN surface on a port it shares with a LAN surface (Web 80) is skipped: an open
+    LAN port can't tell WAN exposure apart from the LAN sibling. A WAN surface with its
+    own port (TR-069's 7547) is still checked, since an answer there is the daemon itself.
+    """
+    if r.effective is None or r.name not in observed:
         return False
-    return r.name in observed
+    return not (r.interface == "WAN" and _port_shared(r.name))
 
 
 def render_reconcile(rows: list[dict]) -> str:

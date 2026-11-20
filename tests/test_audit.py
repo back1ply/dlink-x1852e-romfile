@@ -16,10 +16,14 @@ def _cfg(acl_rules: str = "", extra: str = "") -> str:
         "<Account> "
         '<TelnetEntry Active="Yes" telnet_port="23" /> '
         '<Common Activate="Yes" sshOption="support" /> '
+        '<FtpCommon Active="No" ftp_port="21" /> '
         "</Account> "
         "<Samba> "
         '<Entry0 Active="No" username="admin" /> '
         "</Samba> "
+        '<DMS> <Entry Enable="No" /> <Basic PortNumber="12345" /> </DMS> '
+        '<Dproxy> <Entry Active="Yes" /> </Dproxy> '
+        '<Snmpd> <Entry Active="No" /> </Snmpd> '
         "<Upnpd> <Entry Active=\"No\" /> </Upnpd> "
         "<Cwmp> "
         '<Entry Active="No" acsUrl="" Tr069Enable="1" /> '
@@ -81,6 +85,53 @@ def test_wan_web_admin_is_flagged_exposed():
     web_wan = _by_name(results)["Web (WAN)"]
     assert web_wan.effective is True
     assert web_wan.wan_exposed is True
+
+
+def test_ftp_and_dlna_off_by_default():
+    res = _by_name(audit.evaluate_text(_cfg()))
+    assert res["FTP"].effective is False
+    assert res["FTP"].configured == "Active=No"
+    assert res["DLNA"].effective is False
+    assert res["DLNA"].configured == "Enable=No"
+
+
+def test_dlna_reachable_when_enabled():
+    cfg = _cfg().replace('<Entry Enable="No" />', '<Entry Enable="Yes" />')
+    assert _by_name(audit.evaluate_text(cfg))["DLNA"].effective is True
+
+
+def test_dns_gated_by_domain_acl():
+    # DNS service on, but the domain ACL blocks it -> not reachable
+    acl = '<Entry0 Application="domain" Interface="LAN" Activate="No" /> '
+    r = _by_name(audit.evaluate_text(_cfg(acl)))["DNS"]
+    assert r.effective is False
+    assert "domain/LAN" in r.reason
+
+
+def test_dns_reachable_when_service_and_acl_on():
+    acl = '<Entry0 Application="domain" Interface="LAN" Activate="Yes" /> '
+    assert _by_name(audit.evaluate_text(_cfg(acl)))["DNS"].effective is True
+
+
+def test_snmp_off_by_default():
+    assert _by_name(audit.evaluate_text(_cfg()))["SNMP"].effective is False
+
+
+def test_udp_services_excluded_from_reconcile():
+    # TFTP and SNMP are UDP; a TCP probe can't judge them, so reconcile omits them.
+    results = audit.evaluate_text(_cfg())
+    observed = {"Telnet": False}        # only a TCP surface observed
+    rows = {r["surface"] for r in audit.reconcile(results, observed)}
+    assert "TFTP" not in rows and "SNMP" not in rows
+
+
+def test_reconcile_checks_dedicated_wan_port_skips_shared():
+    # TR-069 has its own port (7547) -> reconciled; Web (WAN) shares 80 with Web (LAN) -> skipped
+    results = audit.evaluate_text(_cfg())
+    observed = {"TR-069": True, "Web (WAN)": True, "Web (LAN)": True}
+    rows = {r["surface"] for r in audit.reconcile(results, observed)}
+    assert "TR-069" in rows
+    assert "Web (WAN)" not in rows
 
 
 def test_ssh_console_is_advisory_only():
