@@ -12,7 +12,7 @@ import re
 import sys
 from pathlib import Path
 
-from . import __version__, config, core, redact, report, unpack
+from . import __version__, audit, config, core, redact, report, unpack
 
 
 def _err(msg: str) -> None:
@@ -184,7 +184,8 @@ def cmd_findkey(a) -> int:
 
 def cmd_report(a) -> int:
     raw = Path(a.file).read_bytes().decode("utf-8", "replace")
-    text, warn = report.render(raw, sections=a.section, show_secrets=a.show_secrets)
+    text, warn = report.render(raw, sections=a.section, show_secrets=a.show_secrets,
+                               effective=getattr(a, "effective", True))
     if warn:
         print(f"note: {warn}", file=sys.stderr)
     if a.json:
@@ -195,6 +196,48 @@ def cmd_report(a) -> int:
     else:
         print(text)
     return 0
+
+
+def _audit_live(a):
+    """Fetch the live config and probe its ports; return (results, reconcile_rows)."""
+    from .device import live, secrets
+    host = secrets.get("X1852E_HOST", a.host or a.file, "192.168.1.1") or "192.168.1.1"
+    raw = live.fetch(host).decode("utf-8", "replace")
+    results = audit.evaluate_text(raw)
+    recon = audit.reconcile(results, audit.probe_ports(host))
+    print(f"[audit] live config + port probe of {host}", file=sys.stderr)
+    return results, recon
+
+
+def _emit_audit(a, results, recon) -> None:
+    if a.json:
+        out = {"surfaces": audit.to_json(results)}
+        if recon is not None:
+            out["reconcile"] = recon
+        print(json.dumps(out, indent=2))
+        return
+    print(audit.render_table(results, only_exposed=a.only_exposed))
+    if recon is not None:
+        print("\n== config verdict vs. observed open ports ==")
+        print(audit.render_reconcile(recon))
+
+
+def cmd_audit(a) -> int:
+    from .device import DeviceError
+    if not a.live and not a.file:
+        _err("audit needs a config file, or --live to pull from the device")
+        return 2
+    try:
+        if a.live:
+            results, recon = _audit_live(a)
+        else:
+            raw = Path(a.file).read_bytes().decode("utf-8", "replace")
+            results, recon = audit.evaluate_text(raw), None
+    except (OSError, DeviceError) as e:
+        _err(f"audit failed: {e}")
+        return 1
+    _emit_audit(a, results, recon)
+    return 1 if a.exit_code and any(r.wan_exposed for r in results) else 0
 
 
 def _mask_data(data: dict) -> dict:
@@ -428,6 +471,7 @@ COMMANDS = {
     "set": cmd_set,
     "diff": cmd_diff,
     "redact": cmd_redact,
+    "audit": cmd_audit,
     "unpack": cmd_unpack,
     "fetch": cmd_fetch,
     "acl": cmd_acl,
@@ -435,6 +479,28 @@ COMMANDS = {
     "recv": cmd_recv,
     "tftp": cmd_tftp,
 }
+
+
+def _add_report_parser(sub) -> None:
+    p = sub.add_parser("report", help="readable summary of a plaintext config")
+    p.add_argument("file"); p.add_argument("--show-secrets", action="store_true")
+    p.add_argument("--section", action="append"); p.add_argument("--json", action="store_true")
+    p.add_argument("--no-effective", dest="effective", action="store_false",
+                   help="do not annotate gated flags with their resolved state")
+
+
+def _add_audit_parser(sub) -> None:
+    p = sub.add_parser("audit",
+                       help="resolve each service to its effective (reachable) state")
+    p.add_argument("file", nargs="?", help="plaintext config (omit with --live)")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--only-exposed", action="store_true",
+                   help="show only surfaces that are actually reachable")
+    p.add_argument("--live", action="store_true",
+                   help="re-evaluate the live config and probe the known ports")
+    p.add_argument("--host", help="live host (default: X1852E_HOST or 192.168.1.1)")
+    p.add_argument("--exit-code", action="store_true",
+                   help="exit 1 if any WAN-reachable surface is found")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -470,9 +536,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("findkey", help="harvest keys from a firmware rootfs/binary and try each")
     p.add_argument("target"); p.add_argument("--cfg", required=True); p.add_argument("-o", "--output")
 
-    p = sub.add_parser("report", help="readable summary of a plaintext config")
-    p.add_argument("file"); p.add_argument("--show-secrets", action="store_true")
-    p.add_argument("--section", action="append"); p.add_argument("--json", action="store_true")
+    _add_report_parser(sub)
+    _add_audit_parser(sub)
 
     p = sub.add_parser("get", help="read a config value by path (Section/Element/attr)")
     p.add_argument("file")

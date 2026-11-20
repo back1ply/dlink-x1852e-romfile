@@ -34,6 +34,10 @@ romfile get config.xml ACL/Entry2/Activate          # -> No
 romfile set config.xml ACL/Entry2/Activate Yes      # byte-exact, in place
 romfile encrypt config.xml -o new_romfile.cfg
 
+# see which services are *actually* reachable (resolves ACLs / master switches)
+romfile audit config.xml                    # table of effective state per surface
+romfile audit --live 192.168.1.1            # compare the verdict to observed open ports
+
 # see exactly what changed between two backups (secrets masked)
 romfile diff old_config.xml config.xml
 
@@ -45,7 +49,7 @@ romfile info romfile.cfg --json
 ```
 
 The config comes out as plain `<ROMFILE>…</ROMFILE>` XML/`name=value` text.
-Subcommands: `info solve encrypt decrypt try findkey report get set diff redact unpack`,
+Subcommands: `info solve encrypt decrypt try findkey report get set diff redact audit unpack`,
 plus live-device commands `fetch acl telnet recv tftp`. Data is
 written to stdout; notes/keys go to stderr. Exit codes: `0` ok, `1` failure, `2` usage.
 
@@ -233,6 +237,7 @@ source in `src/`). Offline, file/firmware commands:
 | `romfile set` | change one value in place by targeted byte-exact substitution (`-o` to write a copy) |
 | `romfile diff` | compare two decrypted configs — added/removed/changed attributes (`--json`, `--exit-code`, `--show-secrets`) |
 | `romfile redact` | write a shareable copy of a plaintext config, sensitive values replaced with `REDACTED` |
+| `romfile audit` | resolve each remote-access surface to its **effective** (reachable) state — raw flags gated by ACLs, master switches and dependencies (`--json`, `--only-exposed`, `--exit-code`, `--live`). See [docs/effective-state.md](docs/effective-state.md) |
 | `romfile unpack` | unpack a firmware image: RSA signature + `2RDH` + LZMA + SquashFS (`--list` to report only) |
 
 Live-device commands (they talk to a unit on your LAN; code isolated in

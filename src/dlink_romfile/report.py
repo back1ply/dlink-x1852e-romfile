@@ -74,7 +74,7 @@ def _collect_lenient(raw: str) -> dict:
     return data
 
 
-def _render_section(name: str, items, show_secrets: bool) -> list[str]:
+def _render_section(name: str, items, show_secrets: bool, notes=None) -> list[str]:
     lines = ["", "== %s (%d) ==" % (name, len(items))]
     for i, (label, attrs) in enumerate(items):
         parts = []
@@ -85,7 +85,9 @@ def _render_section(name: str, items, show_secrets: bool) -> list[str]:
                 v = "<%d chars>" % len(v)
             elif not show_secrets and redact.classify(k.lstrip("_"), v):
                 v = redact.mask(v)
-            parts.append("%s=%s" % (k.lstrip("_"), v))
+            note = notes.get((name, label, k)) if notes else None
+            cell = "%s=%s" % (k.lstrip("_"), v)
+            parts.append("%s  [%s]" % (cell, note) if note else cell)
         if not parts:
             continue
         prefix = "[%d]" % i if label.lower().startswith("entry") else "%s:" % label
@@ -93,9 +95,18 @@ def _render_section(name: str, items, show_secrets: bool) -> list[str]:
     return lines
 
 
-def render(raw: str, sections=None, show_secrets: bool = False) -> tuple[str, str]:
-    """Return (report_text, warning_text)."""
+def render(raw: str, sections=None, show_secrets: bool = False,
+           effective: bool = True) -> tuple[str, str]:
+    """Return (report_text, warning_text).
+
+    When ``effective`` is set, gated security flags carry an inline note from
+    :mod:`dlink_romfile.audit` explaining their resolved (reachable/off) state.
+    """
     data, warn = parse(raw)
+    notes = None
+    if effective:
+        from . import audit
+        notes = audit.annotate(data)
     if sections:
         wanted = list(sections)
     else:
@@ -104,7 +115,7 @@ def render(raw: str, sections=None, show_secrets: bool = False) -> tuple[str, st
     out: list[str] = []
     for name in wanted:
         if name in data:
-            out += _render_section(name, data[name], show_secrets)
+            out += _render_section(name, data[name], show_secrets, notes)
     if not sections:
         hidden = sorted(set(data) - set(wanted))
         if hidden:
